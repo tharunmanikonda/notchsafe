@@ -10,12 +10,14 @@ class NotchWindow: NSObject {
     let fileStorage: FileStorageManager
     let vaultManager: VaultManager
     let clipboardManager: ClipboardManager
+    let notesManager: NotesManager
     
-    init(screenshotManager: ScreenshotManager, fileStorage: FileStorageManager, vaultManager: VaultManager, clipboardManager: ClipboardManager) {
+    init(screenshotManager: ScreenshotManager, fileStorage: FileStorageManager, vaultManager: VaultManager, clipboardManager: ClipboardManager, notesManager: NotesManager) {
         self.screenshotManager = screenshotManager
         self.fileStorage = fileStorage
         self.vaultManager = vaultManager
         self.clipboardManager = clipboardManager
+        self.notesManager = notesManager
         super.init()
         createWindow()
         createChevronWindow()
@@ -27,13 +29,14 @@ class NotchWindow: NSObject {
             fileStorage: fileStorage,
             vaultManager: vaultManager,
             clipboardManager: clipboardManager,
+            notesManager: notesManager,
             onClose: { [weak self] in self?.hide() }
         )
         
         let hostingView = NSHostingView(rootView: contentView)
         
         window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 520),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -83,7 +86,7 @@ class NotchWindow: NSObject {
         let screen = NSScreen.main ?? NSScreen.screens.first!
         let screenFrame = screen.visibleFrame
         let windowWidth: CGFloat = 360
-        let windowHeight: CGFloat = 500
+        let windowHeight: CGFloat = 520
         
         let x = screenFrame.midX - (windowWidth / 2)
         let y = screenFrame.maxY - windowHeight - 10

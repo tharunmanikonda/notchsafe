@@ -5,6 +5,7 @@ struct NotchSafeView: View {
     let fileStorage: FileStorageManager
     let vaultManager: VaultManager
     let clipboardManager: ClipboardManager
+    let notesManager: NotesManager
     let onClose: () -> Void
     
     @State private var selectedTab: Tab = .actions
@@ -12,10 +13,12 @@ struct NotchSafeView: View {
     @State private var clipboardItems: [ClipboardItem] = []
     @State private var isVaultLocked = true
     @State private var showAuthPrompt = false
+    @State private var autoLockTimeRemaining: TimeInterval?
     
     enum Tab: String, CaseIterable {
         case actions = "bolt.fill"
         case files = "folder.fill"
+        case notes = "note.text"
         case vault = "lock.shield.fill"
         case clipboard = "doc.on.clipboard.fill"
     }
@@ -29,7 +32,7 @@ struct NotchSafeView: View {
                 .padding(.top, 8)
             
             // Tab selector
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 ForEach(Tab.allCases, id: \.self) { tab in
                     TabButton(icon: tab.rawValue, isSelected: selectedTab == tab) {
                         withAnimation(.spring(response: 0.3)) {
@@ -46,6 +49,20 @@ struct NotchSafeView: View {
             Divider()
                 .background(Color.white.opacity(0.1))
             
+            // Auto-lock indicator
+            if !isVaultLocked, let remaining = autoLockTimeRemaining {
+                HStack {
+                    Image(systemName: "lock.clock")
+                        .font(.system(size: 10))
+                    Text("Auto-lock in \(formatTime(remaining))")
+                        .font(.system(size: 10))
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+            
             // Content
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 16) {
@@ -54,6 +71,8 @@ struct NotchSafeView: View {
                         ActionsView(screenshotManager: screenshotManager)
                     case .files:
                         FilesView(fileStorage: fileStorage, files: $files)
+                    case .notes:
+                        NotesView(notesManager: notesManager)
                     case .vault:
                         VaultView(vaultManager: vaultManager, isLocked: $isVaultLocked)
                     case .clipboard:
@@ -72,14 +91,36 @@ struct NotchSafeView: View {
             RoundedRectangle(cornerRadius: 20)
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
-        .frame(width: 340, height: 460)
+        .frame(width: 340, height: 480)
         .onAppear {
             files = fileStorage.getFiles()
             clipboardItems = clipboardManager.getRecentItems()
+            setupAutoLockTimer()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultShouldLock)) { _ in
+            isVaultLocked = true
         }
         .sheet(isPresented: $showAuthPrompt) {
             AuthSheet(vaultManager: vaultManager, isLocked: $isVaultLocked)
         }
+    }
+    
+    func setupAutoLockTimer() {
+        // Update auto-lock timer every 10 seconds
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+            if !isVaultLocked {
+                autoLockTimeRemaining = vaultManager.getAutoLockRemainingTime()
+            }
+        }
+    }
+    
+    func formatTime(_ interval: TimeInterval) -> String {
+        let minutes = Int(interval) / 60
+        let seconds = Int(interval) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
     }
 }
 
@@ -92,9 +133,9 @@ struct TabButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(isSelected ? .white : .white.opacity(0.5))
-                .frame(width: 44, height: 44)
+                .frame(width: 40, height: 40)
                 .background(
                     Circle()
                         .fill(isSelected ? Color.accentColor : Color.clear)

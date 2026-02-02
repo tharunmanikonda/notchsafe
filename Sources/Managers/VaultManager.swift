@@ -7,6 +7,12 @@ class VaultManager {
     private let keychainKey = "notchsafe.vault.key"
     private var encryptionKey: SymmetricKey?
     
+    // MARK: - Auto Lock
+    private var autoLockTimer: Timer?
+    private let autoLockTimeout: TimeInterval = 300 // 5 minutes default
+    private var lastActivity: Date?
+    var onAutoLock: (() -> Void)?
+    
     init() {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         vaultURL = documentsPath.appendingPathComponent("NotchSafe/Vault", isDirectory: true)
@@ -14,6 +20,51 @@ class VaultManager {
         
         // Initialize or retrieve encryption key
         encryptionKey = getOrCreateEncryptionKey()
+    }
+    
+    deinit {
+        stopAutoLockTimer()
+    }
+    
+    // MARK: - Auto Lock Management
+    
+    func startAutoLockTimer() {
+        stopAutoLockTimer()
+        lastActivity = Date()
+        
+        // Check every 30 seconds
+        autoLockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.checkAutoLock()
+        }
+    }
+    
+    func stopAutoLockTimer() {
+        autoLockTimer?.invalidate()
+        autoLockTimer = nil
+    }
+    
+    func resetAutoLockTimer() {
+        lastActivity = Date()
+    }
+    
+    private func checkAutoLock() {
+        guard let lastActivity = lastActivity else { return }
+        
+        let elapsed = Date().timeIntervalSince(lastActivity)
+        if elapsed >= autoLockTimeout {
+            // Auto lock triggered
+            stopAutoLockTimer()
+            DispatchQueue.main.async { [weak self] in
+                self?.onAutoLock?()
+            }
+        }
+    }
+    
+    func getAutoLockRemainingTime() -> TimeInterval? {
+        guard let lastActivity = lastActivity else { return nil }
+        let elapsed = Date().timeIntervalSince(lastActivity)
+        let remaining = autoLockTimeout - elapsed
+        return max(0, remaining)
     }
     
     // MARK: - Encryption Key Management
@@ -43,12 +94,15 @@ class VaultManager {
         if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
             let reason = "Unlock your secure vault"
             
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, error in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { [weak self] success, error in
+                if success {
+                    self?.startAutoLockTimer()
+                }
                 completion(success)
             }
         } else {
-            // Device doesn't support biometrics - still allow access with warning
-            // In production, you'd want a password fallback
+            // Device doesn't support biometrics - still allow access
+            startAutoLockTimer()
             completion(true)
         }
     }
@@ -62,6 +116,8 @@ class VaultManager {
     // MARK: - File Operations with Encryption
     
     func saveFile(from url: URL) -> StoredFile? {
+        resetAutoLockTimer() // Activity detected
+        
         guard let key = encryptionKey else {
             print("Vault: No encryption key available")
             return nil
@@ -106,6 +162,8 @@ class VaultManager {
     }
     
     func getFiles() -> [StoredFile] {
+        resetAutoLockTimer() // Activity detected
+        
         guard let contents = try? FileManager.default.contentsOfDirectory(at: vaultURL, includingPropertiesForKeys: nil) else {
             return []
         }
@@ -137,6 +195,8 @@ class VaultManager {
     }
     
     func decryptFile(_ file: StoredFile) -> Data? {
+        resetAutoLockTimer() // Activity detected
+        
         guard let key = encryptionKey else { return nil }
         
         do {
@@ -151,6 +211,8 @@ class VaultManager {
     }
     
     func deleteFile(_ file: StoredFile) {
+        resetAutoLockTimer() // Activity detected
+        
         try? FileManager.default.removeItem(at: file.url)
         
         // Also delete metadata

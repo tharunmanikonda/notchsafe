@@ -8,13 +8,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var fileStorage: FileStorageManager?
     var vaultManager: VaultManager?
     var clipboardManager: ClipboardManager?
+    var notesManager: NotesManager?
     
     // Timers - stored to prevent leaks and allow invalidation
     private var mouseTrackingTimer: Timer?
     private var hotkeyMonitor: Any?
     
     // Screen detection
-    private var currentScreen: NSScreen?
     private var notchHoverWorkItem: DispatchWorkItem?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -25,6 +25,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         fileStorage = FileStorageManager()
         vaultManager = VaultManager()
         clipboardManager = ClipboardManager()
+        notesManager = NotesManager()
+        
+        // Setup auto-lock callback
+        vaultManager?.onAutoLock = { [weak self] in
+            DispatchQueue.main.async {
+                // Post notification to lock vault
+                NotificationCenter.default.post(name: .vaultShouldLock, object: nil)
+            }
+        }
         
         // Setup notch window
         setupNotchWindow()
@@ -45,6 +54,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        
+        // Start clipboard monitoring
+        clipboardManager?.startMonitoring()
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -60,6 +72,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Stop clipboard monitoring
         clipboardManager?.stopMonitoring()
         
+        // Stop vault auto-lock
+        vaultManager?.stopAutoLockTimer()
+        
         NotificationCenter.default.removeObserver(self)
     }
     
@@ -72,13 +87,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screenshot = screenshotManager,
               let files = fileStorage,
               let vault = vaultManager,
-              let clipboard = clipboardManager else { return }
+              let clipboard = clipboardManager,
+              let notes = notesManager else { return }
         
         notchWindow = NotchWindow(
             screenshotManager: screenshot,
             fileStorage: files,
             vaultManager: vault,
-            clipboardManager: clipboard
+            clipboardManager: clipboard,
+            notesManager: notes
         )
     }
     
@@ -156,4 +173,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleNotchWindow() {
         notchWindow?.toggle()
     }
+}
+
+// MARK: - Notification Names
+extension Notification.Name {
+    static let vaultShouldLock = Notification.Name("vaultShouldLock")
 }

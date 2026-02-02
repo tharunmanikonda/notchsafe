@@ -34,6 +34,10 @@ struct VaultView: View {
                 vaultFiles = vaultManager.getFiles()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultShouldLock)) { _ in
+            isLocked = true
+            vaultFiles = []
+        }
         .sheet(isPresented: $showDecryptedPreview) {
             if let file = selectedFile, let data = decryptedFileData {
                 DecryptedFilePreview(file: file, data: data)
