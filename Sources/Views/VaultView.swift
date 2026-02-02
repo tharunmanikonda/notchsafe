@@ -6,18 +6,37 @@ struct VaultView: View {
     @Binding var isLocked: Bool
     @State private var vaultFiles: [StoredFile] = []
     @State private var isDragging = false
+    @State private var showDecryptedPreview = false
+    @State private var decryptedFileData: Data?
+    @State private var selectedFile: StoredFile?
     
     var body: some View {
         VStack(spacing: 12) {
             if isLocked {
-                LockedVaultView(onUnlock: authenticate)
+                LockedVaultView(
+                    vaultManager: vaultManager,
+                    onUnlock: authenticate
+                )
             } else {
                 UnlockedVaultView(
                     vaultManager: vaultManager,
                     files: $vaultFiles,
                     isDragging: $isDragging,
+                    selectedFile: $selectedFile,
+                    decryptedData: $decryptedFileData,
+                    showPreview: $showDecryptedPreview,
                     onLock: { isLocked = true }
                 )
+            }
+        }
+        .onAppear {
+            if !isLocked {
+                vaultFiles = vaultManager.getFiles()
+            }
+        }
+        .sheet(isPresented: $showDecryptedPreview) {
+            if let file = selectedFile, let data = decryptedFileData {
+                DecryptedFilePreview(file: file, data: data)
             }
         }
     }
@@ -35,6 +54,7 @@ struct VaultView: View {
 }
 
 struct LockedVaultView: View {
+    let vaultManager: VaultManager
     let onUnlock: () -> Void
     @State private var isAuthenticating = false
     
@@ -44,19 +64,21 @@ struct LockedVaultView: View {
             
             ZStack {
                 Circle()
-                    .fill(Color.accentColor.opacity(0.1))
+                    .fill(Color.green.opacity(0.1))
                     .frame(width: 100, height: 100)
                 
                 Image(systemName: "lock.fill")
                     .font(.system(size: 40, weight: .semibold))
-                    .foregroundStyle(.accent)
+                    .foregroundStyle(.green)
             }
             
             VStack(spacing: 8) {
                 Text("Vault Locked")
                     .font(.system(size: 18, weight: .semibold))
                 
-                Text("Authenticate to access your secure files")
+                Text(vaultManager.isBiometricAvailable() 
+                    ? "Authenticate to access your secure files"
+                    : "Tap to unlock your secure files")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -71,17 +93,17 @@ struct LockedVaultView: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Image(systemName: "touchid")
+                        Image(systemName: vaultManager.isBiometricAvailable() ? "touchid" : "lock.open")
                             .font(.system(size: 16))
                     }
                     
-                    Text("Unlock with Touch ID")
+                    Text(vaultManager.isBiometricAvailable() ? "Unlock with Touch ID" : "Unlock Vault")
                         .font(.system(size: 15, weight: .medium))
                 }
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(Color.accentColor)
+                .background(Color.green)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
@@ -97,14 +119,17 @@ struct UnlockedVaultView: View {
     let vaultManager: VaultManager
     @Binding var files: [StoredFile]
     @Binding var isDragging: Bool
+    @Binding var selectedFile: StoredFile?
+    @Binding var decryptedData: Data?
+    @Binding var showPreview: Bool
     let onLock: () -> Void
     
     var body: some View {
         VStack(spacing: 12) {
             // Header with lock button
             HStack {
-                Label("Secure Vault", systemImage: "checkmark.shield.fill")
-                    .font(.system(size: 14, weight: .medium))
+                Label("AES-256 Encrypted Vault", systemImage: "checkmark.shield.fill")
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.green)
                 
                 Spacer()
@@ -138,9 +163,13 @@ struct UnlockedVaultView: View {
                     Text("Drop sensitive files here")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                    
+                    Text("Files are AES-256 encrypted")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.green.opacity(0.6))
                 }
             }
-            .frame(height: 80)
+            .frame(height: 90)
             .onDrop(of: [.fileURL], isTargeted: $isDragging) { providers in
                 handleDrop(providers: providers)
                 return true
@@ -160,9 +189,11 @@ struct UnlockedVaultView: View {
             } else {
                 LazyVStack(spacing: 8) {
                     ForEach(files) { file in
-                        VaultFileRow(file: file, onDelete: {
-                            deleteFile(file)
-                        })
+                        VaultFileRow(
+                            file: file,
+                            onDecrypt: { decryptAndOpen(file) },
+                            onDelete: { deleteFile(file) }
+                        )
                     }
                 }
             }
@@ -171,17 +202,31 @@ struct UnlockedVaultView: View {
     
     func handleDrop(providers: [NSItemProvider]) {
         for provider in providers {
-            provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { (urlData, error) in
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                guard let url = url else { return }
+                
                 DispatchQueue.main.async {
-                    guard let urlData = urlData as? Data,
-                          let url = URL(dataRepresentation: urlData, relativeTo: nil) else { return }
-                    
                     if let storedFile = vaultManager.saveFile(from: url) {
                         files.append(storedFile)
                     }
                 }
             }
         }
+    }
+    
+    func decryptAndOpen(_ file: StoredFile) {
+        guard let data = vaultManager.decryptFile(file) else {
+            return
+        }
+        
+        selectedFile = file
+        decryptedData = data
+        showPreview = true
+        
+        // Also write to temp and open
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(file.name)
+        try? data.write(to: tempURL)
+        NSWorkspace.shared.open(tempURL)
     }
     
     func deleteFile(_ file: StoredFile) {
@@ -192,6 +237,7 @@ struct UnlockedVaultView: View {
 
 struct VaultFileRow: View {
     let file: StoredFile
+    let onDecrypt: () -> Void
     let onDelete: () -> Void
     
     var body: some View {
@@ -208,19 +254,32 @@ struct VaultFileRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
                 
-                Text("••• Encrypted")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.green.opacity(0.8))
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                    Text("AES-256")
+                        .font(.system(size: 9))
+                }
+                .foregroundStyle(.green.opacity(0.8))
             }
             
             Spacer()
             
-            Button(action: onDelete) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red.opacity(0.7))
+            HStack(spacing: 8) {
+                Button(action: onDecrypt) {
+                    Image(systemName: "lock.open")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                }
+                .buttonStyle(.plain)
+                
+                Button(action: onDelete) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(10)
         .background(Color.green.opacity(0.05))
@@ -232,44 +291,70 @@ struct VaultFileRow: View {
     }
 }
 
-struct AuthSheet: View {
-    let vaultManager: VaultManager
-    @Binding var isLocked: Bool
+struct DecryptedFilePreview: View {
+    let file: StoredFile
+    let data: Data
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.accent)
+        VStack(spacing: 16) {
+            HStack {
+                Text(file.name)
+                    .font(.headline)
+                Spacer()
+                Button("Close") { dismiss() }
+                    .buttonStyle(.bordered)
+            }
             
-            Text("Authentication Required")
-                .font(.system(size: 18, weight: .semibold))
-            
-            Text("Access your secure vault using Touch ID or password")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Button("Authenticate") {
-                vaultManager.authenticate { success in
-                    DispatchQueue.main.async {
-                        if success {
-                            isLocked = false
-                        }
-                        dismiss()
-                    }
+            if let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 300)
+            } else if let text = String(data: data, encoding: .utf8), text.count < 10000 {
+                ScrollView {
+                    Text(text)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 300)
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text("File decrypted")
+                        .font(.headline)
+                    Text(ByteCountFormatter().string(fromByteCount: Int64(data.count)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .buttonStyle(.borderedProminent)
             
-            Button("Cancel") {
-                dismiss()
+            HStack(spacing: 12) {
+                Button("Open in Default App") {
+                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(file.name)
+                    try? data.write(to: tempURL)
+                    NSWorkspace.shared.open(tempURL)
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button("Save As...") {
+                    saveFile()
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
         }
-        .padding(32)
-        .frame(width: 300)
+        .padding()
+        .frame(width: 400)
+    }
+    
+    func saveFile() {
+        let savePanel = NSSavePanel()
+        savePanel.nameFieldStringValue = file.name
+        
+        if savePanel.runModal() == .OK, let url = savePanel.url {
+            try? data.write(to: url)
+        }
     }
 }

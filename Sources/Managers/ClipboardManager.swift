@@ -4,16 +4,31 @@ class ClipboardManager {
     private var lastChangeCount: Int = 0
     private var items: [ClipboardItem] = []
     private let maxItems = 50
+    private var monitoringTimer: Timer?
+    private var isMonitoring = false
     
     init() {
         lastChangeCount = NSPasteboard.general.changeCount
-        startMonitoring()
+    }
+    
+    deinit {
+        stopMonitoring()
     }
     
     func startMonitoring() {
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        guard !isMonitoring else { return }
+        isMonitoring = true
+        
+        // Use 1.5s interval instead of 1s (less battery impact)
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
+    }
+    
+    func stopMonitoring() {
+        monitoringTimer?.invalidate()
+        monitoringTimer = nil
+        isMonitoring = false
     }
     
     func checkClipboard() {
@@ -23,7 +38,8 @@ class ClipboardManager {
         lastChangeCount = pasteboard.changeCount
         
         guard let content = pasteboard.string(forType: .string),
-              !content.isEmpty else { return }
+              !content.isEmpty,
+              content.count < 10000 else { return } // Limit max size
         
         // Don't add duplicates
         if items.first?.content == content {
@@ -57,19 +73,27 @@ class ClipboardManager {
     }
     
     private func detectType(_ content: String) -> ClipboardItem.ClipboardType {
-        if content.contains("@") && content.contains(".") {
+        // Limit regex to first 200 chars for performance
+        let checkContent = String(content.prefix(200))
+        
+        if checkContent.contains("@") && checkContent.contains(".") {
             let emailRegex = try? NSRegularExpression(pattern: "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
-            let range = NSRange(location: 0, length: content.utf16.count)
-            if emailRegex?.firstMatch(in: content, options: [], range: range) != nil {
+            let range = NSRange(location: 0, length: checkContent.utf16.count)
+            if emailRegex?.firstMatch(in: checkContent, options: [], range: range) != nil {
                 return .email
             }
         }
         
-        if content.hasPrefix("http://") || content.hasPrefix("https://") {
+        if checkContent.hasPrefix("http://") || checkContent.hasPrefix("https://") {
             return .url
         }
         
-        if content.contains("func ") || content.contains("class ") || content.contains("import ") {
+        // Simple code detection without heavy regex
+        if checkContent.contains("func ") || 
+           checkContent.contains("class ") || 
+           checkContent.contains("import ") ||
+           checkContent.contains("def ") ||
+           checkContent.contains("function ") {
             return .code
         }
         

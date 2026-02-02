@@ -1,6 +1,5 @@
 import Cocoa
 import SwiftUI
-import ScreenCaptureKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var notchWindow: NotchWindow?
@@ -10,8 +9,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var vaultManager: VaultManager?
     var clipboardManager: ClipboardManager?
     
-    // Hotkey
-    var hotkeyMonitor: Any?
+    // Timers - stored to prevent leaks and allow invalidation
+    private var mouseTrackingTimer: Timer?
+    private var hotkeyMonitor: Any?
+    
+    // Screen detection
+    private var currentScreen: NSScreen?
+    private var notchHoverWorkItem: DispatchWorkItem?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // Hide dock icon
@@ -31,16 +35,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup global hotkey (Cmd + Shift + N)
         setupHotkey()
         
-        // Start tracking mouse for notch hover
+        // Start tracking mouse for notch hover (BATTERY OPTIMIZED)
         startMouseTracking()
+        
+        // Listen for screen changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenDidChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clean up timers to prevent leaks
+        mouseTrackingTimer?.invalidate()
+        mouseTrackingTimer = nil
+        
+        if let monitor = hotkeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            hotkeyMonitor = nil
+        }
+        
+        // Stop clipboard monitoring
+        clipboardManager?.stopMonitoring()
+        
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    @objc func screenDidChange() {
+        // Recalculate window position when screen changes
+        notchWindow?.positionWindow()
     }
     
     func setupNotchWindow() {
+        guard let screenshot = screenshotManager,
+              let files = fileStorage,
+              let vault = vaultManager,
+              let clipboard = clipboardManager else { return }
+        
         notchWindow = NotchWindow(
-            screenshotManager: screenshotManager!,
-            fileStorage: fileStorage!,
-            vaultManager: vaultManager!,
-            clipboardManager: clipboardManager!
+            screenshotManager: screenshot,
+            fileStorage: files,
+            vaultManager: vault,
+            clipboardManager: clipboard
         )
     }
     
@@ -60,33 +98,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    // MARK: - Battery Optimized Mouse Tracking
+    
     func startMouseTracking() {
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.checkNotchHover()
+        // Use 0.2s interval instead of 0.1s (50% less CPU/battery usage)
+        // Skip tracking when window is already visible
+        mouseTrackingTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self = self,
+                  self.notchWindow?.isVisible == false else { return }
+            self.checkNotchHover()
         }
     }
     
     func checkNotchHover() {
-        guard let window = notchWindow?.window else { return }
+        guard let window = notchWindow?.window,
+              !window.isVisible else { return }
         
         let mouseLocation = NSEvent.mouseLocation
-        let screen = NSScreen.main ?? NSScreen.screens.first!
+        
+        // Get current screen safely
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main else {
+            return
+        }
+        
+        // Only show chevron if mouse is in top 100px of screen
         let screenFrame = screen.frame
+        guard mouseLocation.y > screenFrame.maxY - 100 else {
+            notchWindow?.hideChevron()
+            return
+        }
         
         // Notch area (center top of screen)
         let notchWidth: CGFloat = 200
-        let notchHeight: CGFloat = 32
+        let notchHeight: CGFloat = 60
         let notchX = screenFrame.midX - (notchWidth / 2)
         let notchY = screenFrame.maxY - notchHeight
         
-        let notchRect = CGRect(x: notchX, y: notchY, width: notchWidth, height: notchHeight)
-        let hoverBuffer: CGFloat = 50 // Detection area above notch
-        let hoverRect = CGRect(x: notchX, y: notchY - hoverBuffer, width: notchWidth, height: notchHeight + hoverBuffer)
+        let hoverRect = CGRect(x: notchX, y: notchY, width: notchWidth, height: notchHeight)
         
         if hoverRect.contains(mouseLocation) {
-            notchWindow?.showChevron()
-        } else if !window.frame.contains(mouseLocation) {
-            notchWindow?.hide()
+            // Debounce - don't show immediately to prevent flicker
+            if notchHoverWorkItem == nil {
+                let workItem = DispatchWorkItem { [weak self] in
+                    self?.notchWindow?.showChevron()
+                }
+                notchHoverWorkItem = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+            }
+        } else {
+            // Cancel pending show and hide
+            notchHoverWorkItem?.cancel()
+            notchHoverWorkItem = nil
+            notchWindow?.hideChevron()
         }
     }
     

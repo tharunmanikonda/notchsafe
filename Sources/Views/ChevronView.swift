@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChevronView: View {
     let onTap: () -> Void
-    @State private isHovered = false
+    @State private var isHovered = false
     
     var body: some View {
         Button(action: onTap) {
