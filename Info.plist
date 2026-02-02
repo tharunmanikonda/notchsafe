@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>NotchSafe</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.tharun.notchsafe</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>NotchSafe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>NotchSafe needs access to control system features for screenshots and automation.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>NotchSafe needs camera access for screen recording features.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>NotchSafe needs microphone access for screen recording with audio.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>NotchSafe needs screen recording permission to capture screenshots and record your screen.</string>
+</dict>
+</plist>
